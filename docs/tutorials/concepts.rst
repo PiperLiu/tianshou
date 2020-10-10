@@ -8,16 +8,50 @@ Tianshou splits a Reinforcement Learning agent training procedure into these par
     :height: 300
 
 
-Data Batch
-----------
+Here is a more detailed description, where ``Env`` is the environment and ``Model`` is the neural network:
 
-.. automodule:: tianshou.data.Batch
-   :members:
-   :noindex:
+.. image:: /_static/images/concepts_arch2.png
+    :align: center
+    :height: 300
 
 
-Data Buffer
------------
+Batch
+-----
+
+Tianshou provides :class:`~tianshou.data.Batch` as the internal data structure to pass any kind of data to other methods, for example, a collector gives a :class:`~tianshou.data.Batch` to policy for learning. Let's take a look at this script:
+::
+
+    >>> import torch, numpy as np
+    >>> from tianshou.data import Batch
+    >>> data = Batch(a=4, b=[5, 5], c='2312312', d=('a', -2, -3))
+    >>> # the list will automatically be converted to numpy array
+    >>> data.b
+    array([5, 5])
+    >>> data.b = np.array([3, 4, 5])
+    >>> print(data)
+    Batch(
+        a: 4,
+        b: array([3, 4, 5]),
+        c: '2312312',
+        d: array(['a', '-2', '-3'], dtype=object),
+    )
+    >>> data = Batch(obs={'index': np.zeros((2, 3))}, act=torch.zeros((2, 2)))
+    >>> data[:, 1] += 6
+    >>> print(data[-1])
+    Batch(
+        obs: Batch(
+                 index: array([0., 6., 0.]),
+             ),
+        act: tensor([0., 6.]),
+    )
+
+In short, you can define a :class:`~tianshou.data.Batch` with any key-value pair, and perform some common operations over it.
+
+:ref:`batch_concept` is a dedicated tutorial for :class:`~tianshou.data.Batch`. We strongly recommend every user to read it so as to correctly understand and use :class:`~tianshou.data.Batch`.
+
+
+Buffer
+------
 
 .. automodule:: tianshou.data.ReplayBuffer
    :members:
@@ -31,12 +65,72 @@ Policy
 
 Tianshou aims to modularizing RL algorithms. It comes into several classes of policies in Tianshou. All of the policy classes must inherit :class:`~tianshou.policy.BasePolicy`.
 
-A policy class typically has four parts: 
+A policy class typically has the following parts:
 
-* :meth:`~tianshou.policy.BasePolicy.__init__`: initialize the policy, including coping the target network and so on;
-* :meth:`~tianshou.policy.BasePolicy.__call__`: compute action with given observation;
-* :meth:`~tianshou.policy.BasePolicy.process_fn`: pre-process data from the replay buffer (this function can interact with replay buffer);
+* :meth:`~tianshou.policy.BasePolicy.__init__`: initialize the policy, including copying the target network and so on;
+* :meth:`~tianshou.policy.BasePolicy.forward`: compute action with given observation;
+* :meth:`~tianshou.policy.BasePolicy.process_fn`: pre-process data from the replay buffer;
 * :meth:`~tianshou.policy.BasePolicy.learn`: update policy with a given batch of data.
+* :meth:`~tianshou.policy.BasePolicy.post_process_fn`: update the buffer with a given batch of data.
+* :meth:`~tianshou.policy.BasePolicy.update`: the main interface for training. This function samples data from buffer, pre-process data (such as computing n-step return), learn with the data, and finally post-process the data (such as updating prioritized replay buffer); in short, ``process_fn -> learn -> post_process_fn``.
+
+
+.. _policy_state:
+
+States for policy
+^^^^^^^^^^^^^^^^^
+
+During the training process, the policy has two main states: training state and testing state. The training state can be further divided into the collecting state and updating state.
+
+The meaning of training and testing state is obvious: the agent interacts with environment, collects training data and performs update, that's training state; the testing state is to evaluate the performance of the current policy during training process.
+
+As for the collecting state, it is defined as interacting with environments and collecting training data into the buffer;
+we define the updating state as performing a model update by :meth:`~tianshou.policy.BasePolicy.update` during training process.
+
+
+In order to distinguish these states, you can check the policy state by ``policy.training`` and ``policy.updating``. The state setting is as follows:
+
++-----------------------------------+-----------------+-----------------+
+|          State for policy         | policy.training | policy.updating |
++================+==================+=================+=================+
+|                | Collecting state |       True      |      False      |
+| Training state +------------------+-----------------+-----------------+
+|                |  Updating state  |       True      |      True       |
++----------------+------------------+-----------------+-----------------+
+|           Testing state           |       False     |      False      |
++-----------------------------------+-----------------+-----------------+
+
+``policy.updating`` is helpful to distinguish the different exploration state, for example, in DQN we don't have to use epsilon-greedy in a pure network update, so ``policy.updating`` is helpful for setting epsilon in this case.
+
+
+policy.forward
+^^^^^^^^^^^^^^
+
+The ``forward`` function computes the action over given observations. The input and output is algorithm-specific but generally, the function is a mapping of ``(batch, state, ...) -> batch``.
+
+The input batch is the environment data (e.g., observation, reward, done flag and info). It comes from either :meth:`~tianshou.data.Collector.collect` or :meth:`~tianshou.data.ReplayBuffer.sample`. The first dimension of all variables in the input ``batch`` should be equal to the batch-size.
+
+The output is also a Batch which must contain "act" (action) and may contain "state" (hidden state of policy), "policy" (the intermediate result of policy which needs to save into the buffer, see :meth:`~tianshou.policy.BasePolicy.forward`), and some other algorithm-specific keys.
+
+For example, if you try to use your policy to evaluate one episode (and don't want to use :meth:`~tianshou.data.Collector.collect`), use the following code-snippet:
+::
+
+    # assume env is a gym.Env
+    obs, done = env.reset(), False
+    while not done:
+        batch = Batch(obs=[obs])  # the first dimension is batch-size
+        act = policy(batch).act[0]  # policy.forward return a batch, use ".act" to extract the action
+        obs, rew, done, info = env.step(act)
+
+Here, ``Batch(obs=[obs])`` will automatically create the 0-dimension to be the batch-size. Otherwise, the network cannot determine the batch-size.
+
+
+.. _process_fn:
+
+policy.process_fn
+^^^^^^^^^^^^^^^^^
+
+The ``process_fn`` function computes some variables that depends on time-series. For example, compute the N-step or GAE returns.
 
 Take 2-step return DQN as an example. The 2-step return DQN compute each frame's return as:
 
@@ -92,14 +186,12 @@ Collector
 ---------
 
 The :class:`~tianshou.data.Collector` enables the policy to interact with different types of environments conveniently.
-In short, :class:`~tianshou.data.Collector` has two main methods:
 
-* :meth:`~tianshou.data.Collector.collect`: let the policy perform (at least) a specified number of step ``n_step`` or episode ``n_episode`` and store the data in the replay buffer;
-* :meth:`~tianshou.data.Collector.sample`: sample a data batch from replay buffer; it will call :meth:`~tianshou.policy.BasePolicy.process_fn` before returning the final batch data.
+:meth:`~tianshou.data.Collector.collect` is the main method of Collector: it let the policy perform (at least) a specified number of step ``n_step`` or episode ``n_episode`` and store the data in the replay buffer.
 
-Why do we mention **at least** here? For a single environment, the collector will finish exactly ``n_step`` or ``n_episode``. However, for multiple environments, we could not directly store the collected data into the replay buffer, since it breaks the principle of storing data chronologically.
+Why do we mention **at least** here? For multiple environments, we could not directly store the collected data into the replay buffer, since it breaks the principle of storing data chronologically.
 
-The solution is to add some cache buffers inside the collector. Once collecting **a full episode of trajectory**, it will move the stored data from the cache buffer to the main buffer. To satisfy this condition, the collector will interact with environments that may exceed the given step number or episode number.
+The proposed solution is to add some cache buffers inside the collector. Once collecting **a full episode of trajectory**, it will move the stored data from the cache buffer to the main buffer. To satisfy this condition, the collector will interact with environments that may exceed the given step number or episode number.
 
 The general explanation is listed in :ref:`pseudocode`. Other usages of collector are listed in :class:`~tianshou.data.Collector` documentation.
 
@@ -111,32 +203,31 @@ Once you have a collector and a policy, you can start writing the training metho
 
 Tianshou has two types of trainer: :func:`~tianshou.trainer.onpolicy_trainer` and :func:`~tianshou.trainer.offpolicy_trainer`, corresponding to on-policy algorithms (such as Policy Gradient) and off-policy algorithms (such as DQN). Please check out :doc:`/api/tianshou.trainer` for the usage.
 
-There will be more types of trainers, for instance, multi-agent trainer.
-
 
 .. _pseudocode:
 
 A High-level Explanation
 ------------------------
 
-We give a high-level explanation through the pseudocode used in section Policy:
+We give a high-level explanation through the pseudocode used in section :ref:`process_fn`:
 ::
 
     # pseudocode, cannot work                                       # methods in tianshou
     s = env.reset()
     buffer = Buffer(size=10000)                                     # buffer = tianshou.data.ReplayBuffer(size=10000)
-    agent = DQN()                                                   # done in policy.__init__(...)
+    agent = DQN()                                                   # policy.__init__(...)
     for i in range(int(1e6)):                                       # done in trainer
-        a = agent.compute_action(s)                                 # done in policy.__call__(batch, ...)
-        s_, r, d, _ = env.step(a)                                   # done in collector.collect(...)
-        buffer.store(s, a, s_, r, d)                                # done in collector.collect(...)
-        s = s_                                                      # done in collector.collect(...)
+        a = agent.compute_action(s)                                 # act = policy(batch, ...).act
+        s_, r, d, _ = env.step(a)                                   # collector.collect(...)
+        buffer.store(s, a, s_, r, d)                                # collector.collect(...)
+        s = s_                                                      # collector.collect(...)
         if i % 1000 == 0:                                           # done in trainer
-            b_s, b_a, b_s_, b_r, b_d = buffer.get(size=64)          # done in collector.sample(batch_size)
+                                                                    # the following is done in policy.update(batch_size, buffer)
+            b_s, b_a, b_s_, b_r, b_d = buffer.get(size=64)          # batch, indice = buffer.sample(batch_size)
             # compute 2-step returns. How?
-            b_ret = compute_2_step_return(buffer, b_r, b_d, ...)    # done in policy.process_fn(batch, buffer, indice)
+            b_ret = compute_2_step_return(buffer, b_r, b_d, ...)    # policy.process_fn(batch, buffer, indice)
             # update DQN policy
-            agent.update(b_s, b_a, b_s_, b_r, b_d, b_ret)           # done in policy.learn(batch, ...)
+            agent.update(b_s, b_a, b_s_, b_r, b_d, b_ret)           # policy.learn(batch, ...)
 
 
 Conclusion

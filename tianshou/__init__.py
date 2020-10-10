@@ -1,12 +1,13 @@
-from tianshou import data, env, utils, policy, trainer, \
-    exploration
+from tianshou import data, env, utils, policy, trainer, exploration
 
-__version__ = '0.2.0.post2'
+
+__version__ = "0.3.0"
+
 __all__ = [
-    'env',
-    'data',
-    'utils',
-    'policy',
-    'trainer',
-    'exploration',
+    "env",
+    "data",
+    "utils",
+    "policy",
+    "trainer",
+    "exploration",
 ]

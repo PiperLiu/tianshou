@@ -1,5 +1,7 @@
-from tianshou.exploration.random import OUNoise
+from tianshou.exploration.random import BaseNoise, GaussianNoise, OUNoise
 
 __all__ = [
-    'OUNoise',
+    "BaseNoise",
+    "GaussianNoise",
+    "OUNoise",
 ]

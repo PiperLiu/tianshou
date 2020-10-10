@@ -112,6 +112,18 @@ footer p {
     font-size: 100%;
 }
 
+.ethical-rtd {
+    display: none;
+}
+
+.ethical-fixedfooter {
+    display: none;
+}
+
+.ethical-content {
+    display: none;
+}
+
 /* For hidden headers that appear in TOC tree */
 /* see http://stackoverflow.com/a/32363545/3343043 */
 .rst-content .hidden-section {

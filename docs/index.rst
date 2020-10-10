@@ -3,44 +3,73 @@
    You can adapt this file completely to your liking, but it should at least
    contain the root `toctree` directive.
 
+
 Welcome to Tianshou!
 ====================
 
 **Tianshou** (`天授 <https://baike.baidu.com/item/%E5%A4%A9%E6%8E%88>`_) is a reinforcement learning platform based on pure PyTorch. Unlike existing reinforcement learning libraries, which are mainly based on TensorFlow, have many nested classes, unfriendly API, or slow-speed, Tianshou provides a fast-speed framework and pythonic API for building the deep reinforcement learning agent. The supported interface algorithms include:
 
-* `Policy Gradient (PG) <https://papers.nips.cc/paper/1713-policy-gradient-methods-for-reinforcement-learning-with-function-approximation.pdf>`_
-* `Deep Q-Network (DQN) <https://storage.googleapis.com/deepmind-media/dqn/DQNNaturePaper.pdf>`_
-* `Double DQN (DDQN) <https://arxiv.org/pdf/1509.06461.pdf>`_ with n-step returns
-* `Advantage Actor-Critic (A2C) <https://openai.com/blog/baselines-acktr-a2c/>`_
-* `Deep Deterministic Policy Gradient (DDPG) <https://arxiv.org/pdf/1509.02971.pdf>`_
-* `Proximal Policy Optimization (PPO) <https://arxiv.org/pdf/1707.06347.pdf>`_
-* `Twin Delayed DDPG (TD3) <https://arxiv.org/pdf/1802.09477.pdf>`_
-* `Soft Actor-Critic (SAC) <https://arxiv.org/pdf/1812.05905.pdf>`_
+* :class:`~tianshou.policy.PGPolicy` `Policy Gradient <https://papers.nips.cc/paper/1713-policy-gradient-methods-for-reinforcement-learning-with-function-approximation.pdf>`_
+* :class:`~tianshou.policy.DQNPolicy` `Deep Q-Network <https://storage.googleapis.com/deepmind-media/dqn/DQNNaturePaper.pdf>`_
+* :class:`~tianshou.policy.DQNPolicy` `Double DQN <https://arxiv.org/pdf/1509.06461.pdf>`_
+* :class:`~tianshou.policy.DQNPolicy` `Dueling DQN <https://arxiv.org/pdf/1511.06581.pdf>`_
+* :class:`~tianshou.policy.A2CPolicy` `Advantage Actor-Critic <https://openai.com/blog/baselines-acktr-a2c/>`_
+* :class:`~tianshou.policy.DDPGPolicy` `Deep Deterministic Policy Gradient <https://arxiv.org/pdf/1509.02971.pdf>`_
+* :class:`~tianshou.policy.PPOPolicy` `Proximal Policy Optimization <https://arxiv.org/pdf/1707.06347.pdf>`_
+* :class:`~tianshou.policy.TD3Policy` `Twin Delayed DDPG <https://arxiv.org/pdf/1802.09477.pdf>`_
+* :class:`~tianshou.policy.SACPolicy` `Soft Actor-Critic <https://arxiv.org/pdf/1812.05905.pdf>`_
+* :class:`~tianshou.policy.DiscreteSACPolicy` `Discrete Soft Actor-Critic <https://arxiv.org/pdf/1910.07207.pdf>`_
+* :class:`~tianshou.policy.PSRLPolicy` `Posterior Sampling Reinforcement Learning <https://www.ece.uvic.ca/~bctill/papers/learning/Strens_2000.pdf>`_
+* :class:`~tianshou.policy.ImitationPolicy` Imitation Learning
+* :class:`~tianshou.data.PrioritizedReplayBuffer` `Prioritized Experience Replay <https://arxiv.org/pdf/1511.05952.pdf>`_
+* :meth:`~tianshou.policy.BasePolicy.compute_episodic_return` `Generalized Advantage Estimator <https://arxiv.org/pdf/1506.02438.pdf>`_
 
+Here is Tianshou's other features:
 
-Tianshou supports parallel workers for all algorithms as well. All of these algorithms are reformatted as replay-buffer based algorithms.
+* Elegant framework, using only ~2000 lines of code
+* Support parallel environment simulation (synchronous or asynchronous) for all algorithms: :ref:`parallel_sampling`
+* Support recurrent state representation in actor network and critic network (RNN-style training for POMDP): :ref:`rnn_training`
+* Support any type of environment state/action (e.g. a dict, a self-defined class, ...): :ref:`self_defined_env`
+* Support :ref:`customize_training`
+* Support n-step returns estimation :meth:`~tianshou.policy.BasePolicy.compute_nstep_return` and prioritized experience replay :class:`~tianshou.data.PrioritizedReplayBuffer` for all Q-learning based algorithms; GAE, nstep and PER are very fast thanks to numba jit function and vectorized numpy operation
+* Support :doc:`/tutorials/tictactoe`
+* Comprehensive `unit tests <https://github.com/thu-ml/tianshou/actions>`_, including functional checking, RL pipeline checking, documentation checking, PEP8 code-style checking, and type checking
+
+中文文档位于 `https://tianshou.readthedocs.io/zh/latest/ <https://tianshou.readthedocs.io/zh/latest/>`_
 
 
 Installation
 ------------
 
-Tianshou is currently hosted on `PyPI <https://pypi.org/project/tianshou/>`_. You can simply install Tianshou with the following command:
-::
+Tianshou is currently hosted on `PyPI <https://pypi.org/project/tianshou/>`_ and `conda-forge <https://github.com/conda-forge/tianshou-feedstock>`_. It requires Python >= 3.6.
 
-    pip3 install tianshou
+You can simply install Tianshou from PyPI with the following command:
+
+.. code-block:: bash
+
+    $ pip install tianshou
+
+If you use Anaconda or Miniconda, you can install Tianshou from conda-forge through the following command:
+
+.. code-block:: bash
+
+    $ conda -c conda-forge install tianshou
 
 You can also install with the newest version through GitHub:
-::
 
-    pip3 install git+https://github.com/thu-ml/tianshou.git@master
+.. code-block:: bash
+
+    $ pip install git+https://github.com/thu-ml/tianshou.git@master --upgrade
 
 After installation, open your python console and type
 ::
 
-    import tianshou as ts
-    print(ts.__version__)
+    import tianshou
+    print(tianshou.__version__)
 
 If no error occurs, you have successfully installed Tianshou.
+
+Tianshou is still under development, you can also check out the documents in stable version through `tianshou.readthedocs.io/en/stable/ <https://tianshou.readthedocs.io/en/stable/>`_.
 
 
 .. toctree::
@@ -49,8 +78,11 @@ If no error occurs, you have successfully installed Tianshou.
 
    tutorials/dqn
    tutorials/concepts
-   tutorials/tabular
+   tutorials/batch
+   tutorials/tictactoe
    tutorials/trick
+   tutorials/cheatsheet
+
 
 .. toctree::
    :maxdepth: 1
@@ -63,11 +95,13 @@ If no error occurs, you have successfully installed Tianshou.
    api/tianshou.exploration
    api/tianshou.utils
 
+
 .. toctree::
    :maxdepth: 1
    :caption: Community
 
    contributing
+   contributor
 
 
 Indices and tables
