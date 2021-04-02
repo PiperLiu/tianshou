@@ -12,7 +12,6 @@ from tianshou.env.utils import CloudpickleWrapper
 
 
 _NP_TO_CT = {
-    np.bool: ctypes.c_bool,
     np.bool_: ctypes.c_bool,
     np.uint8: ctypes.c_uint8,
     np.uint16: ctypes.c_uint16,
@@ -31,10 +30,7 @@ class ShArray:
     """Wrapper of multiprocessing Array."""
 
     def __init__(self, dtype: np.generic, shape: Tuple[int]) -> None:
-        self.arr = Array(
-            _NP_TO_CT[dtype.type],  # type: ignore
-            int(np.prod(shape)),
-        )
+        self.arr = Array(_NP_TO_CT[dtype.type], int(np.prod(shape)))  # type: ignore
         self.dtype = dtype
         self.shape = shape
 
@@ -67,8 +63,7 @@ def _worker(
     obs_bufs: Optional[Union[dict, tuple, ShArray]] = None,
 ) -> None:
     def _encode_obs(
-        obs: Union[dict, tuple, np.ndarray],
-        buffer: Union[dict, tuple, ShArray],
+        obs: Union[dict, tuple, np.ndarray], buffer: Union[dict, tuple, ShArray]
     ) -> None:
         if isinstance(obs, np.ndarray) and isinstance(buffer, ShArray):
             buffer.save(obs)
@@ -124,7 +119,6 @@ class SubprocEnvWorker(EnvWorker):
     def __init__(
         self, env_fn: Callable[[], gym.Env], share_memory: bool = False
     ) -> None:
-        super().__init__(env_fn)
         self.parent_remote, self.child_remote = Pipe()
         self.share_memory = share_memory
         self.buffer: Optional[Union[dict, tuple, ShArray]] = None
@@ -143,6 +137,7 @@ class SubprocEnvWorker(EnvWorker):
         self.process = Process(target=_worker, args=args, daemon=True)
         self.process.start()
         self.child_remote.close()
+        super().__init__(env_fn)
 
     def __getattr__(self, key: str) -> Any:
         self.parent_remote.send(["getattr", key])
@@ -185,25 +180,22 @@ class SubprocEnvWorker(EnvWorker):
                 if remain_time <= 0:
                     break
             # connection.wait hangs if the list is empty
-            new_ready_conns = connection.wait(
-                remain_conns, timeout=remain_time)
+            new_ready_conns = connection.wait(remain_conns, timeout=remain_time)
             ready_conns.extend(new_ready_conns)  # type: ignore
-            remain_conns = [
-                conn for conn in remain_conns if conn not in ready_conns]
+            remain_conns = [conn for conn in remain_conns if conn not in ready_conns]
         return [workers[conns.index(con)] for con in ready_conns]
 
     def send_action(self, action: np.ndarray) -> None:
         self.parent_remote.send(["step", action])
 
-    def get_result(
-        self,
-    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    def get_result(self) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         obs, rew, done, info = self.parent_remote.recv()
         if self.share_memory:
             obs = self._decode_obs()
         return obs, rew, done, info
 
     def seed(self, seed: Optional[int] = None) -> Optional[List[int]]:
+        super().seed(seed)
         self.parent_remote.send(["seed", seed])
         return self.parent_remote.recv()
 

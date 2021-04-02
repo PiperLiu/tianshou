@@ -14,7 +14,7 @@ class ImitationPolicy(BasePolicy):
         :class:`~tianshou.policy.BasePolicy`. (s -> a)
     :param torch.optim.Optimizer optim: for optimizing the model.
     :param str mode: indicate the imitation type ("continuous" or "discrete"
-        action space), defaults to "continuous".
+        action space). Default to "continuous".
 
     .. seealso::
 
@@ -32,9 +32,8 @@ class ImitationPolicy(BasePolicy):
         super().__init__(**kwargs)
         self.model = model
         self.optim = optim
-        assert (
-            mode in ["continuous", "discrete"]
-        ), f"Mode {mode} is not in ['continuous', 'discrete']."
+        assert mode in ["continuous", "discrete"], \
+            f"Mode {mode} is not in ['continuous', 'discrete']."
         self.mode = mode
 
     def forward(
@@ -57,7 +56,7 @@ class ImitationPolicy(BasePolicy):
             a_ = to_torch(batch.act, dtype=torch.float32, device=a.device)
             loss = F.mse_loss(a, a_)  # type: ignore
         elif self.mode == "discrete":  # classification
-            a = self(batch).logits
+            a = F.log_softmax(self(batch).logits, dim=-1)
             a_ = to_torch(batch.act, dtype=torch.long, device=a.device)
             loss = F.nll_loss(a, a_)  # type: ignore
         loss.backward()

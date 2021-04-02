@@ -1,3 +1,4 @@
+import sys
 import copy
 import torch
 import pickle
@@ -19,6 +20,10 @@ def test_batch():
     assert not Batch(a=np.float64(1.0)).is_empty()
     assert len(Batch(a=[1, 2, 3], b={'c': {}})) == 3
     assert not Batch(a=[1, 2, 3]).is_empty()
+    b = Batch({'a': [4, 4], 'b': [5, 5]}, c=[None, None])
+    assert b.c.dtype == object
+    b = Batch(d=[None], e=[starmap], f=Batch)
+    assert b.d.dtype == b.e.dtype == object and b.f == Batch
     b = Batch()
     b.update()
     assert b.is_empty()
@@ -143,14 +148,16 @@ def test_batch():
     assert batch3.a.d.e[0] == 4.0
     batch3.a.d[0] = Batch(f=5.0)
     assert batch3.a.d.f[0] == 5.0
-    with pytest.raises(KeyError):
+    with pytest.raises(ValueError):
         batch3.a.d[0] = Batch(f=5.0, g=0.0)
+    with pytest.raises(ValueError):
+        batch3[0] = Batch(a={"c": 2, "e": 1})
     # auto convert
     batch4 = Batch(a=np.array(['a', 'b']))
-    assert batch4.a.dtype == np.object  # auto convert to np.object
+    assert batch4.a.dtype == object  # auto convert to object
     batch4.update(a=np.array(['c', 'd']))
     assert list(batch4.a) == ['c', 'd']
-    assert batch4.a.dtype == np.object  # auto convert to np.object
+    assert batch4.a.dtype == object  # auto convert to object
     batch5 = Batch(a=np.array([{'index': 0}]))
     assert isinstance(batch5.a, Batch)
     assert np.allclose(batch5.a.index, [0])
@@ -333,6 +340,12 @@ def test_batch_cat_and_stack():
     assert torch.allclose(test.b, ans.b)
     assert np.allclose(test.common.c, ans.common.c)
 
+    # test with illegal input format
+    with pytest.raises(ValueError):
+        Batch.cat([[Batch(a=1)], [Batch(a=1)]])
+    with pytest.raises(ValueError):
+        Batch.stack([[Batch(a=1)], [Batch(a=1)]])
+
     # exceptions
     assert Batch.cat([]).is_empty()
     assert Batch.stack([]).is_empty()
@@ -361,7 +374,10 @@ def test_batch_over_batch_to_torch():
     assert batch.a.dtype == torch.float64
     assert batch.b.c.dtype == torch.float32
     assert batch.b.d.dtype == torch.float64
-    assert batch.b.e.dtype == torch.int64
+    if sys.platform in ["win32", "cygwin"]:  # windows
+        assert batch.b.e.dtype == torch.int32
+    else:
+        assert batch.b.e.dtype == torch.int64
     batch.to_torch(dtype=torch.float32)
     assert batch.a.dtype == torch.float32
     assert batch.b.c.dtype == torch.float32
@@ -393,21 +409,23 @@ def test_utils_to_torch_numpy():
     assert data_list_2_torch.shape == (2, 3, 3)
     assert np.allclose(to_numpy(to_torch(data_list_2)), data_list_2)
     data_list_3 = [np.zeros((3, 2)), np.zeros((3, 3))]
-    data_list_3_torch = to_torch(data_list_3)
-    assert isinstance(data_list_3_torch, list)
-    assert all(isinstance(e, torch.Tensor) for e in data_list_3_torch)
-    assert all(starmap(np.allclose,
-                       zip(to_numpy(to_torch(data_list_3)), data_list_3)))
+    data_list_3_torch = [torch.zeros((3, 2)), torch.zeros((3, 3))]
+    with pytest.raises(TypeError):
+        to_torch(data_list_3)
+    with pytest.raises(TypeError):
+        to_numpy(data_list_3_torch)
     data_list_4 = [np.zeros((2, 3)), np.zeros((3, 3))]
-    data_list_4_torch = to_torch(data_list_4)
-    assert isinstance(data_list_4_torch, list)
-    assert all(isinstance(e, torch.Tensor) for e in data_list_4_torch)
-    assert all(starmap(np.allclose,
-                       zip(to_numpy(to_torch(data_list_4)), data_list_4)))
+    data_list_4_torch = [torch.zeros((2, 3)), torch.zeros((3, 3))]
+    with pytest.raises(TypeError):
+        to_torch(data_list_4)
+    with pytest.raises(TypeError):
+        to_numpy(data_list_4_torch)
     data_list_5 = [np.zeros(2), np.zeros((3, 3))]
-    data_list_5_torch = to_torch(data_list_5)
-    assert isinstance(data_list_5_torch, list)
-    assert all(isinstance(e, torch.Tensor) for e in data_list_5_torch)
+    data_list_5_torch = [torch.zeros(2), torch.zeros((3, 3))]
+    with pytest.raises(TypeError):
+        to_torch(data_list_5)
+    with pytest.raises(TypeError):
+        to_numpy(data_list_5_torch)
     data_array = np.random.rand(3, 2, 2)
     data_empty_tensor = to_torch(data_array[[]])
     assert isinstance(data_empty_tensor, torch.Tensor)
@@ -425,7 +443,10 @@ def test_utils_to_torch_numpy():
     assert to_numpy(to_numpy).item() == to_numpy
     # additional test for to_torch, for code-coverage
     assert isinstance(to_torch(1), torch.Tensor)
-    assert to_torch(1).dtype == torch.int64
+    if sys.platform in ["win32", "cygwin"]:  # windows
+        assert to_torch(1).dtype == torch.int32
+    else:
+        assert to_torch(1).dtype == torch.int64
     assert to_torch(1.).dtype == torch.float64
     assert isinstance(to_torch({'a': [1]})['a'], torch.Tensor)
     with pytest.raises(TypeError):
@@ -496,10 +517,10 @@ def test_batch_empty():
     assert np.allclose(b5.b.c, [2, 0])
     assert np.allclose(b5.b.d, [1, 0])
     data = Batch(a=[False, True],
-                 b={'c': np.array([2., 'st'], dtype=np.object),
+                 b={'c': np.array([2., 'st'], dtype=object),
                     'd': [1, None],
                     'e': [2., float('nan')]},
-                 c=np.array([1, 3, 4], dtype=np.int),
+                 c=np.array([1, 3, 4], dtype=int),
                  t=torch.tensor([4, 5, 6, 7.]))
     data[-1] = Batch.empty(data[1])
     assert np.allclose(data.c, [1, 3, 0])

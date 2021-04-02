@@ -19,12 +19,11 @@ class DQNPolicy(BasePolicy):
         :class:`~tianshou.policy.BasePolicy`. (s -> logits)
     :param torch.optim.Optimizer optim: a torch.optim for optimizing the model.
     :param float discount_factor: in [0, 1].
-    :param int estimation_step: greater than 1, the number of steps to look
-        ahead.
+    :param int estimation_step: the number of steps to look ahead. Default to 1.
     :param int target_update_freq: the target network update frequency (0 if
-        you do not use the target network).
-    :param bool reward_normalization: normalize the reward to Normal(0, 1),
-        defaults to False.
+        you do not use the target network). Default to 0.
+    :param bool reward_normalization: normalize the reward to Normal(0, 1).
+        Default to False.
 
     .. seealso::
 
@@ -46,15 +45,13 @@ class DQNPolicy(BasePolicy):
         self.model = model
         self.optim = optim
         self.eps = 0.0
-        assert (
-            0.0 <= discount_factor <= 1.0
-        ), "discount factor should be in [0, 1]"
+        assert 0.0 <= discount_factor <= 1.0, "discount factor should be in [0, 1]"
         self._gamma = discount_factor
         assert estimation_step > 0, "estimation_step should be greater than 0"
         self._n_step = estimation_step
         self._target = target_update_freq > 0
         self._freq = target_update_freq
-        self._cnt = 0
+        self._iter = 0
         if self._target:
             self.model_old = deepcopy(self.model)
             self.model_old.eval()
@@ -72,23 +69,17 @@ class DQNPolicy(BasePolicy):
 
     def sync_weight(self) -> None:
         """Synchronize the weight for the target network."""
-        self.model_old.load_state_dict(self.model.state_dict())
+        self.model_old.load_state_dict(self.model.state_dict())  # type: ignore
 
-    def _target_q(
-        self, buffer: ReplayBuffer, indice: np.ndarray
-    ) -> torch.Tensor:
+    def _target_q(self, buffer: ReplayBuffer, indice: np.ndarray) -> torch.Tensor:
         batch = buffer[indice]  # batch.obs_next: s_{t+n}
+        result = self(batch, input="obs_next")
         if self._target:
             # target_Q = Q_old(s_, argmax(Q_new(s_, *)))
-            a = self(batch, input="obs_next").act
-            with torch.no_grad():
-                target_q = self(
-                    batch, model="model_old", input="obs_next"
-                ).logits
-            target_q = target_q[np.arange(len(a)), a]
+            target_q = self(batch, model="model_old", input="obs_next").logits
         else:
-            with torch.no_grad():
-                target_q = self(batch, input="obs_next").logits.max(dim=1)[0]
+            target_q = result.logits
+        target_q = target_q[np.arange(len(result.act)), result.act]
         return target_q
 
     def process_fn(
@@ -103,6 +94,16 @@ class DQNPolicy(BasePolicy):
             batch, buffer, indice, self._target_q,
             self._gamma, self._n_step, self._rew_norm)
         return batch
+
+    def compute_q_value(
+        self, logits: torch.Tensor, mask: Optional[np.ndarray]
+    ) -> torch.Tensor:
+        """Compute the q value based on the network's raw output and action mask."""
+        if mask is not None:
+            # the masked q value should be smaller than logits.min()
+            min_value = logits.min() - logits.max() - 1.0
+            logits = logits + to_torch_as(1 - mask, logits) * min_value
+        return logits
 
     def forward(
         self,
@@ -144,25 +145,15 @@ class DQNPolicy(BasePolicy):
         model = getattr(self, model)
         obs = batch[input]
         obs_ = obs.obs if hasattr(obs, "obs") else obs
-        q, h = model(obs_, state=state, info=batch.info)
-        act: np.ndarray = to_numpy(q.max(dim=1)[1])
-        if hasattr(obs, "mask"):
-            # some of actions are masked, they cannot be selected
-            q_: np.ndarray = to_numpy(q)
-            q_[~obs.mask] = -np.inf
-            act = q_.argmax(axis=1)
-        # add eps to act in training or testing phase
-        if not self.updating and not np.isclose(self.eps, 0.0):
-            for i in range(len(q)):
-                if np.random.rand() < self.eps:
-                    q_ = np.random.rand(*q[i].shape)
-                    if hasattr(obs, "mask"):
-                        q_[~obs.mask[i]] = -np.inf
-                    act[i] = q_.argmax()
-        return Batch(logits=q, act=act, state=h)
+        logits, h = model(obs_, state=state, info=batch.info)
+        q = self.compute_q_value(logits, getattr(obs, "mask", None))
+        if not hasattr(self, "max_action_num"):
+            self.max_action_num = q.shape[1]
+        act = to_numpy(q.max(dim=1)[1])
+        return Batch(logits=logits, act=act, state=h)
 
     def learn(self, batch: Batch, **kwargs: Any) -> Dict[str, float]:
-        if self._target and self._cnt % self._freq == 0:
+        if self._target and self._iter % self._freq == 0:
             self.sync_weight()
         self.optim.zero_grad()
         weight = batch.pop("weight", 1.0)
@@ -174,5 +165,18 @@ class DQNPolicy(BasePolicy):
         batch.weight = td  # prio-buffer
         loss.backward()
         self.optim.step()
-        self._cnt += 1
+        self._iter += 1
         return {"loss": loss.item()}
+
+    def exploration_noise(
+        self, act: Union[np.ndarray, Batch], batch: Batch
+    ) -> Union[np.ndarray, Batch]:
+        if isinstance(act, np.ndarray) and not np.isclose(self.eps, 0.0):
+            bsz = len(act)
+            rand_mask = np.random.rand(bsz) < self.eps
+            q = np.random.rand(bsz, self.max_action_num)  # [0, 1]
+            if hasattr(batch.obs, "mask"):
+                q += batch.obs.mask
+            rand_act = q.argmax(axis=1)
+            act[rand_mask] = rand_act[rand_mask]
+        return act

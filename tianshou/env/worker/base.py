@@ -11,6 +11,7 @@ class EnvWorker(ABC):
         self._env_fn = env_fn
         self.is_closed = False
         self.result: Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]
+        self.action_space = getattr(self, "action_space")
 
     @abstractmethod
     def __getattr__(self, key: str) -> Any:
@@ -24,9 +25,7 @@ class EnvWorker(ABC):
     def send_action(self, action: np.ndarray) -> None:
         pass
 
-    def get_result(
-        self,
-    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    def get_result(self) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         return self.result
 
     def step(
@@ -44,16 +43,13 @@ class EnvWorker(ABC):
 
     @staticmethod
     def wait(
-        workers: List["EnvWorker"],
-        wait_num: int,
-        timeout: Optional[float] = None,
+        workers: List["EnvWorker"], wait_num: int, timeout: Optional[float] = None
     ) -> List["EnvWorker"]:
         """Given a list of workers, return those ready ones."""
         raise NotImplementedError
 
-    @abstractmethod
     def seed(self, seed: Optional[int] = None) -> Optional[List[int]]:
-        pass
+        return self.action_space.seed(seed)  # issue 299
 
     @abstractmethod
     def render(self, **kwargs: Any) -> Any:

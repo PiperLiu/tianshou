@@ -1,11 +1,12 @@
 import torch
+import warnings
 import numpy as np
 from copy import deepcopy
 from typing import Any, Dict, Tuple, Union, Optional
 
 from tianshou.policy import BasePolicy
 from tianshou.exploration import BaseNoise, GaussianNoise
-from tianshou.data import Batch, ReplayBuffer, to_torch_as
+from tianshou.data import Batch, ReplayBuffer
 
 
 class DDPGPolicy(BasePolicy):
@@ -15,21 +16,21 @@ class DDPGPolicy(BasePolicy):
         :class:`~tianshou.policy.BasePolicy`. (s -> logits)
     :param torch.optim.Optimizer actor_optim: the optimizer for actor network.
     :param torch.nn.Module critic: the critic network. (s, a -> Q(s, a))
-    :param torch.optim.Optimizer critic_optim: the optimizer for critic
-        network.
-    :param action_range: the action range (minimum, maximum).
-    :type action_range: Tuple[float, float]
-    :param float tau: param for soft update of the target network, defaults to
-        0.005.
-    :param float gamma: discount factor, in [0, 1], defaults to 0.99.
+    :param torch.optim.Optimizer critic_optim: the optimizer for critic network.
+    :param float tau: param for soft update of the target network. Default to 0.005.
+    :param float gamma: discount factor, in [0, 1]. Default to 0.99.
     :param BaseNoise exploration_noise: the exploration noise,
-        add to the action, defaults to ``GaussianNoise(sigma=0.1)``.
+        add to the action. Default to ``GaussianNoise(sigma=0.1)``.
     :param bool reward_normalization: normalize the reward to Normal(0, 1),
-        defaults to False.
-    :param bool ignore_done: ignore the done flag while training the policy,
-        defaults to False.
-    :param int estimation_step: greater than 1, the number of steps to look
-        ahead.
+        Default to False.
+    :param int estimation_step: the number of steps to look ahead. Default to 1.
+    :param bool action_scaling: whether to map actions from range [-1, 1] to range
+        [action_spaces.low, action_spaces.high]. Default to True.
+    :param str action_bound_method: method to bound action to range [-1, 1], can be
+        either "clip" (for simply clipping the action), "tanh" (for applying tanh
+        squashing) for now, or empty string for no bounding. Default to "clip".
+    :param Optional[gym.Space] action_space: env's action space, mandatory if you want
+        to use option "action_scaling" or "action_bound_method". Default to None.
 
     .. seealso::
 
@@ -43,16 +44,17 @@ class DDPGPolicy(BasePolicy):
         actor_optim: Optional[torch.optim.Optimizer],
         critic: Optional[torch.nn.Module],
         critic_optim: Optional[torch.optim.Optimizer],
-        action_range: Tuple[float, float],
         tau: float = 0.005,
         gamma: float = 0.99,
         exploration_noise: Optional[BaseNoise] = GaussianNoise(sigma=0.1),
         reward_normalization: bool = False,
-        ignore_done: bool = False,
         estimation_step: int = 1,
+        action_scaling: bool = True,
+        action_bound_method: str = "clip",
         **kwargs: Any,
     ) -> None:
-        super().__init__(**kwargs)
+        super().__init__(action_scaling=action_scaling,
+                         action_bound_method=action_bound_method, **kwargs)
         if actor is not None and actor_optim is not None:
             self.actor: torch.nn.Module = actor
             self.actor_old = deepcopy(actor)
@@ -68,14 +70,9 @@ class DDPGPolicy(BasePolicy):
         assert 0.0 <= gamma <= 1.0, "gamma should be in [0, 1]"
         self._gamma = gamma
         self._noise = exploration_noise
-        self._range = action_range
-        self._action_bias = (action_range[0] + action_range[1]) / 2.0
-        self._action_scale = (action_range[1] - action_range[0]) / 2.0
         # it is only a little difference to use GaussianNoise
         # self.noise = OUNoise()
-        self._rm_done = ignore_done
         self._rew_norm = reward_normalization
-        assert estimation_step > 0, "estimation_step should be greater than 0"
         self._n_step = estimation_step
 
     def set_exp_noise(self, noise: Optional[BaseNoise]) -> None:
@@ -93,26 +90,21 @@ class DDPGPolicy(BasePolicy):
         """Soft-update the weight for the target network."""
         for o, n in zip(self.actor_old.parameters(), self.actor.parameters()):
             o.data.copy_(o.data * (1.0 - self._tau) + n.data * self._tau)
-        for o, n in zip(
-            self.critic_old.parameters(), self.critic.parameters()
-        ):
+        for o, n in zip(self.critic_old.parameters(), self.critic.parameters()):
             o.data.copy_(o.data * (1.0 - self._tau) + n.data * self._tau)
 
     def _target_q(
         self, buffer: ReplayBuffer, indice: np.ndarray
     ) -> torch.Tensor:
         batch = buffer[indice]  # batch.obs_next: s_{t+n}
-        with torch.no_grad():
-            target_q = self.critic_old(
-                batch.obs_next,
-                self(batch, model='actor_old', input='obs_next').act)
+        target_q = self.critic_old(
+            batch.obs_next,
+            self(batch, model='actor_old', input='obs_next').act)
         return target_q
 
     def process_fn(
         self, batch: Batch, buffer: ReplayBuffer, indice: np.ndarray
     ) -> Batch:
-        if self._rm_done:
-            batch.done = batch.done * 0.0
         batch = self.compute_nstep_return(
             batch, buffer, indice, self._target_q,
             self._gamma, self._n_step, self._rew_norm)
@@ -141,22 +133,30 @@ class DDPGPolicy(BasePolicy):
         model = getattr(self, model)
         obs = batch[input]
         actions, h = model(obs, state=state, info=batch.info)
-        actions += self._action_bias
-        if self._noise and not self.updating:
-            actions += to_torch_as(self._noise(actions.shape), actions)
-        actions = actions.clamp(self._range[0], self._range[1])
         return Batch(act=actions, state=h)
 
-    def learn(self, batch: Batch, **kwargs: Any) -> Dict[str, float]:
-        weight = batch.pop("weight", 1.0)
-        current_q = self.critic(batch.obs, batch.act).flatten()
+    @staticmethod
+    def _mse_optimizer(
+        batch: Batch, critic: torch.nn.Module, optimizer: torch.optim.Optimizer
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        """A simple wrapper script for updating critic network."""
+        weight = getattr(batch, "weight", 1.0)
+        current_q = critic(batch.obs, batch.act).flatten()
         target_q = batch.returns.flatten()
         td = current_q - target_q
+        # critic_loss = F.mse_loss(current_q1, target_q)
         critic_loss = (td.pow(2) * weight).mean()
-        batch.weight = td  # prio-buffer
-        self.critic_optim.zero_grad()
+        optimizer.zero_grad()
         critic_loss.backward()
-        self.critic_optim.step()
+        optimizer.step()
+        return td, critic_loss
+
+    def learn(self, batch: Batch, **kwargs: Any) -> Dict[str, float]:
+        # critic
+        td, critic_loss = self._mse_optimizer(
+            batch, self.critic, self.critic_optim)
+        batch.weight = td  # prio-buffer
+        # actor
         action = self(batch).act
         actor_loss = -self.critic(batch.obs, action).mean()
         self.actor_optim.zero_grad()
@@ -167,3 +167,13 @@ class DDPGPolicy(BasePolicy):
             "loss/actor": actor_loss.item(),
             "loss/critic": critic_loss.item(),
         }
+
+    def exploration_noise(
+        self, act: Union[np.ndarray, Batch], batch: Batch
+    ) -> Union[np.ndarray, Batch]:
+        if self._noise is None:
+            return act
+        if isinstance(act, np.ndarray):
+            return act + self._noise(act.shape)
+        warnings.warn("Cannot add exploration noise to non-numpy_array action.")
+        return act

@@ -144,3 +144,6 @@ MUJOCO_LOG.TXT
 .DS_Store
 *.zip
 *.pstats
+*.swp
+*.pkl
+*.hdf5

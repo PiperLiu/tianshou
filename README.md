@@ -23,6 +23,8 @@
 - [Deep Q-Network (DQN)](https://storage.googleapis.com/deepmind-media/dqn/DQNNaturePaper.pdf)
 - [Double DQN](https://arxiv.org/pdf/1509.06461.pdf)
 - [Dueling DQN](https://arxiv.org/pdf/1511.06581.pdf)
+- [Categorical DQN (C51)](https://arxiv.org/pdf/1707.06887.pdf)
+- [Quantile Regression DQN (QRDQN)](https://arxiv.org/pdf/1710.10044.pdf)
 - [Advantage Actor-Critic (A2C)](https://openai.com/blog/baselines-acktr-a2c/)
 - [Deep Deterministic Policy Gradient (DDPG)](https://arxiv.org/pdf/1509.02971.pdf)
 - [Proximal Policy Optimization (PPO)](https://arxiv.org/pdf/1707.06347.pdf)
@@ -30,13 +32,15 @@
 - [Soft Actor-Critic (SAC)](https://arxiv.org/pdf/1812.05905.pdf)
 - [Discrete Soft Actor-Critic (SAC-Discrete)](https://arxiv.org/pdf/1910.07207.pdf)
 - Vanilla Imitation Learning
+- [Discrete Batch-Constrained deep Q-Learning (BCQ-Discrete)](https://arxiv.org/pdf/1910.01708.pdf)
 - [Prioritized Experience Replay (PER)](https://arxiv.org/pdf/1511.05952.pdf)
 - [Generalized Advantage Estimator (GAE)](https://arxiv.org/pdf/1506.02438.pdf)
 - [Posterior Sampling Reinforcement Learning (PSRL)](https://www.ece.uvic.ca/~bctill/papers/learning/Strens_2000.pdf)
 
 Here is Tianshou's other features:
 
-- Elegant framework, using only ~2000 lines of code
+- Elegant framework, using only ~3000 lines of code
+- State-of-the-art [MuJoCo benchmark](https://github.com/thu-ml/tianshou/tree/master/examples/mujoco) for REINFORCE/A2C/PPO/DDPG/TD3/SAC algorithms
 - Support parallel environment simulation (synchronous or asynchronous) for all algorithms [Usage](https://tianshou.readthedocs.io/en/latest/tutorials/cheatsheet.html#parallel-sampling)
 - Support recurrent state representation in actor network and critic network (RNN-style training for POMDP) [Usage](https://tianshou.readthedocs.io/en/latest/tutorials/cheatsheet.html#rnn-style-training)
 - Support any type of environment state/action (e.g. a dict, a self-defined class, ...) [Usage](https://tianshou.readthedocs.io/en/latest/tutorials/cheatsheet.html#user-defined-environment-and-different-state-representation)
@@ -155,12 +159,13 @@ Currently, the overall code of Tianshou platform is less than 2500 lines. Most o
 ```python
 result = collector.collect(n_step=n)
 ```
-
-If you have 3 environments in total and want to collect 1 episode in the first environment, 3 for the third environment:
+If you have 3 environments in total and want to collect 4 episodes:
 
 ```python
-result = collector.collect(n_episode=[1, 0, 3])
+result = collector.collect(n_episode=4)
 ```
+
+Collector will collect exactly 4 episodes without any bias of episode length despite we only have 3 parallel environments.
 
 If you want to train the given policy with a sampled batch:
 
@@ -187,12 +192,13 @@ Define some hyper-parameters:
 ```python
 task = 'CartPole-v0'
 lr, epoch, batch_size = 1e-3, 10, 64
-train_num, test_num = 8, 100
+train_num, test_num = 10, 100
 gamma, n_step, target_freq = 0.9, 3, 320
 buffer_size = 20000
 eps_train, eps_test = 0.1, 0.05
-step_per_epoch, collect_per_step = 1000, 10
+step_per_epoch, step_per_collect = 10000, 10
 writer = SummaryWriter('log/dqn')  # tensorboard is also supported!
+logger = ts.utils.BasicLogger(writer)
 ```
 
 Make environments:
@@ -212,7 +218,7 @@ from tianshou.utils.net.common import Net
 env = gym.make(task)
 state_shape = env.observation_space.shape or env.observation_space.n
 action_shape = env.action_space.shape or env.action_space.n
-net = Net(layer_num=2, state_shape=state_shape, action_shape=action_shape)
+net = Net(state_shape=state_shape, action_shape=action_shape, hidden_sizes=[128, 128, 128])
 optim = torch.optim.Adam(net.parameters(), lr=lr)
 ```
 
@@ -220,20 +226,20 @@ Setup policy and collectors:
 
 ```python
 policy = ts.policy.DQNPolicy(net, optim, gamma, n_step, target_update_freq=target_freq)
-train_collector = ts.data.Collector(policy, train_envs, ts.data.ReplayBuffer(buffer_size))
-test_collector = ts.data.Collector(policy, test_envs)
+train_collector = ts.data.Collector(policy, train_envs, ts.data.VectorReplayBuffer(buffer_size, train_num), exploration_noise=True)
+test_collector = ts.data.Collector(policy, test_envs, exploration_noise=True)  # because DQN uses epsilon-greedy method
 ```
 
 Let's train it:
 
 ```python
 result = ts.trainer.offpolicy_trainer(
-    policy, train_collector, test_collector, epoch, step_per_epoch, collect_per_step,
-    test_num, batch_size,
+    policy, train_collector, test_collector, epoch, step_per_epoch, step_per_collect,
+    test_num, batch_size, update_per_step=1 / step_per_collect,
     train_fn=lambda epoch, env_step: policy.set_eps(eps_train),
     test_fn=lambda epoch, env_step: policy.set_eps(eps_test),
     stop_fn=lambda mean_rewards: mean_rewards >= env.spec.reward_threshold,
-    writer=writer, task=task)
+    logger=logger)
 print(f'Finished training! Use {result["duration"]}')
 ```
 
@@ -249,7 +255,7 @@ Watch the performance with 35 FPS:
 ```python
 policy.eval()
 policy.set_eps(eps_test)
-collector = ts.data.Collector(policy, env)
+collector = ts.data.Collector(policy, env, exploration_noise=True)
 collector.collect(n_episode=1, render=1 / 35)
 ```
 
@@ -275,7 +281,7 @@ If you find Tianshou useful, please cite it in your publications.
 
 ```latex
 @misc{tianshou,
-  author = {Jiayi Weng, Minghao Zhang, Alexis Duburcq, Kaichao You, Dong Yan, Hang Su, Jun Zhu},
+  author = {Jiayi Weng, Huayu Chen, Alexis Duburcq, Kaichao You, Minghao Zhang, Dong Yan, Hang Su, Jun Zhu},
   title = {Tianshou},
   year = {2020},
   publisher = {GitHub},
